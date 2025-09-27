@@ -7,7 +7,22 @@ import sys
 sys.path.insert(0, '.')
 
 from gpt_oss.vllm.token_generator import TokenGenerator
-from gpt_oss.harmony.encoding import load_harmony_encoding, HarmonyEncodingName
+
+from openai_harmony import (
+    Author,
+    Conversation,
+    DeveloperContent,
+    HarmonyEncodingName,
+    Message,
+    ReasoningEffort,
+    Role,
+    StreamableParser,
+    StreamState,
+    SystemContent,
+    TextContent,
+    ToolDescription,
+    load_harmony_encoding,
+)
 
 def test_language_sampling():
     print("Testing VLLM Output Space Sampling with Language")
