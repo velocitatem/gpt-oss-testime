@@ -24,6 +24,8 @@ from openai_harmony import (
     load_harmony_encoding,
 )
 
+MAX_TOKENS = 500
+
 def test_language_sampling():
     print("Testing VLLM Output Space Sampling with Language")
     print("=" * 55)
@@ -44,7 +46,7 @@ def test_language_sampling():
         print("✓ Generator created with sampling enabled")
 
         # Test prompt about dog care website colors
-        prompt = "Suggest 3 colors for a dog care website:"
+        prompt = "Suggest 3 colors for a dog care website (Structure output as a JSON list only as ['#XXXXXX',...]):"
         prompt_tokens = encoding.encode(prompt)
         stop_tokens = encoding.stop_tokens()
 
@@ -57,11 +59,11 @@ def test_language_sampling():
         for i, token in enumerate(generator.generate(
             prompt_tokens=prompt_tokens,
             stop_tokens=stop_tokens,
-            max_tokens=50,
+            max_tokens=MAX_TOKENS,
             temperature=0.8
         )):
             sampled_tokens.append(token)
-            if i >= 49:
+            if i >= MAX_TOKENS:
                 break
 
         sampled_text = encoding.decode(sampled_tokens)
@@ -74,11 +76,11 @@ def test_language_sampling():
         for i, token in enumerate(generator.generate(
             prompt_tokens=prompt_tokens,
             stop_tokens=stop_tokens,
-            max_tokens=50,
+            max_tokens=MAX_TOKENS,
             temperature=0.8
         )):
             normal_tokens.append(token)
-            if i >= 49:
+            if i >= MAX_TOKENS:
                 break
 
         normal_text = encoding.decode(normal_tokens)
