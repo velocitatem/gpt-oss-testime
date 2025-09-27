@@ -128,7 +128,7 @@ def test_multiple_prompts():
         for i, prompt in enumerate(prompts, 1):
             print(f"\n--- Test {i}: {prompt} ---")
             prompt_tokens = encoding.encode(prompt)
-            stop_tokens = encoding.get_stop_tokens()
+            stop_tokens = encoding.stop_tokens()
 
             tokens = []
             for j, token in enumerate(generator.generate(
