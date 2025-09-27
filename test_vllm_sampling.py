@@ -46,7 +46,7 @@ def test_language_sampling():
         # Test prompt about dog care website colors
         prompt = "Suggest 3 colors for a dog care website:"
         prompt_tokens = encoding.encode(prompt)
-        stop_tokens = encoding.get_stop_tokens()
+        stop_tokens = encoding.stop_tokens()
 
         print(f"\nPrompt: '{prompt}'")
         print(f"Encoded to {len(prompt_tokens)} tokens")
