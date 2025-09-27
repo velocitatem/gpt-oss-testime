@@ -114,11 +114,21 @@ class TokenGenerator:
         last_token_id = []
         while self.engine.has_unfinished_requests():
             step_outputs = self.engine.step()
-            output = step_outputs[0].outputs[0]
+
+            # Check if we have any outputs
+            if not step_outputs or len(step_outputs) == 0:
+                continue
+
+            first_output = step_outputs[0]
+            if not hasattr(first_output, 'outputs') or len(first_output.outputs) == 0:
+                continue
+
+            output = first_output.outputs[0]
             token_ids = output.token_ids
             logprobs_list = output.logprobs if hasattr(output, "logprobs") else None
             new_token_ids = token_ids[len(last_token_id):]
             new_logprobs = logprobs_list[len(last_token_id):] if logprobs_list is not None else [None] * len(new_token_ids)
+
             for token_id, logprobs in zip(new_token_ids, new_logprobs):
                 last_token_id.append(token_id)
                 if return_logprobs:

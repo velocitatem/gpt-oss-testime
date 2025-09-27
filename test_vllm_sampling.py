@@ -1,76 +1,146 @@
 #!/usr/bin/env python3
 """
-Simple test for VLLM output space sampling.
+Test VLLM output space sampling with language-based interaction like chat.py
 """
 
 import sys
 sys.path.insert(0, '.')
 
 from gpt_oss.vllm.token_generator import TokenGenerator
+from gpt_oss.harmony.encoding import load_harmony_encoding, HarmonyEncodingName
 
-def test_vllm_sampling():
-    print("Testing VLLM output space sampling...")
+def test_language_sampling():
+    print("Testing VLLM Output Space Sampling with Language")
+    print("=" * 55)
 
-    # Create generator with sampling enabled
     try:
+        # Load encoding like in chat.py
+        encoding = load_harmony_encoding(HarmonyEncodingName.HARMONY_GPT_OSS)
+        print("✓ Harmony encoding loaded")
+
+        # Create generator with sampling enabled
         generator = TokenGenerator(
-            "gpt-oss-20b",  # Remove trailing slash
+            "gpt-oss-20b",
             tensor_parallel_size=1,
             enable_output_sampling=True,
             noise_std=0.15,
             noise_spread=0.3
         )
-        print("✓ Generator created successfully with sampling enabled")
+        print("✓ Generator created with sampling enabled")
 
-        # Simple tokenization (basic approach)
-        prompt = "Hello world"
-        prompt_tokens = [10, 20, 30]  # Dummy tokens for testing
+        # Test prompt about dog care website colors
+        prompt = "Suggest 3 colors for a dog care website:"
+        prompt_tokens = encoding.encode(prompt)
+        stop_tokens = encoding.get_stop_tokens()
 
-        print(f"Testing generation with prompt tokens: {prompt_tokens}")
+        print(f"\nPrompt: '{prompt}'")
+        print(f"Encoded to {len(prompt_tokens)} tokens")
 
-        # Generate a few tokens
-        tokens = []
+        # Generate with sampling enabled
+        print("\n--- Generation WITH sampling ---")
+        sampled_tokens = []
         for i, token in enumerate(generator.generate(
             prompt_tokens=prompt_tokens,
-            stop_tokens=[50256],  # Common EOS token
-            max_tokens=5,
-            temperature=0.7
+            stop_tokens=stop_tokens,
+            max_tokens=50,
+            temperature=0.8
         )):
-            tokens.append(token)
-            print(f"Generated token {i+1}: {token}")
-            if i >= 4:  # Limit to 5 tokens
+            sampled_tokens.append(token)
+            if i >= 49:
                 break
 
-        print(f"✓ Generated tokens with sampling: {tokens}")
+        sampled_text = encoding.decode(sampled_tokens)
+        print(f"Output: {sampled_text}")
 
-        # Test disabling sampling
+        # Generate with sampling disabled
+        print("\n--- Generation WITHOUT sampling ---")
         generator.set_output_sampling(False)
-        print("✓ Sampling disabled")
-
-        # Generate again without sampling
         normal_tokens = []
         for i, token in enumerate(generator.generate(
             prompt_tokens=prompt_tokens,
-            stop_tokens=[50256],
-            max_tokens=5,
-            temperature=0.7
+            stop_tokens=stop_tokens,
+            max_tokens=50,
+            temperature=0.8
         )):
             normal_tokens.append(token)
-            if i >= 4:
+            if i >= 49:
                 break
 
-        print(f"✓ Generated tokens without sampling: {normal_tokens}")
+        normal_text = encoding.decode(normal_tokens)
+        print(f"Output: {normal_text}")
 
         # Compare results
-        if tokens != normal_tokens:
-            print("✓ Sampling appears to be working - outputs differ!")
+        print("\n--- Comparison ---")
+        print(f"Outputs are {'different' if sampled_text != normal_text else 'identical'}")
+
+        if sampled_text != normal_text:
+            print("✓ Output space sampling is working!")
+            print(f"Sampled length: {len(sampled_tokens)} tokens")
+            print(f"Normal length: {len(normal_tokens)} tokens")
         else:
-            print("⚠ Warning: Outputs are identical - sampling may not be active")
+            print("⚠ Outputs identical - sampling may need adjustment")
+
+        return True
 
     except Exception as e:
         print(f"✗ Error: {e}")
         import traceback
         traceback.print_exc()
+        return False
+
+def test_multiple_prompts():
+    """Test sampling with different prompts to show variety."""
+    print("\n" + "=" * 55)
+    print("Testing Multiple Prompts with Sampling")
+    print("=" * 55)
+
+    try:
+        encoding = load_harmony_encoding(HarmonyEncodingName.HARMONY_GPT_OSS)
+        generator = TokenGenerator(
+            "gpt-oss-20b",
+            tensor_parallel_size=1,
+            enable_output_sampling=True,
+            noise_std=0.2,  # Higher noise for more variation
+            noise_spread=0.4
+        )
+
+        prompts = [
+            "What are the best dog breeds for families?",
+            "How to train a puppy:",
+            "Dog nutrition tips:"
+        ]
+
+        for i, prompt in enumerate(prompts, 1):
+            print(f"\n--- Test {i}: {prompt} ---")
+            prompt_tokens = encoding.encode(prompt)
+            stop_tokens = encoding.get_stop_tokens()
+
+            tokens = []
+            for j, token in enumerate(generator.generate(
+                prompt_tokens=prompt_tokens,
+                stop_tokens=stop_tokens,
+                max_tokens=30,
+                temperature=0.9
+            )):
+                tokens.append(token)
+                if j >= 29:
+                    break
+
+            response = encoding.decode(tokens)
+            print(f"Response: {response}")
+
+        print("\n✓ Multiple prompt test completed")
+
+    except Exception as e:
+        print(f"✗ Multiple prompt test failed: {e}")
 
 if __name__ == "__main__":
-    test_vllm_sampling()
+    # Run main language test
+    success = test_language_sampling()
+
+    # Run multiple prompts test if main test succeeded
+    if success:
+        test_multiple_prompts()
+
+    print("\n" + "=" * 55)
+    print("Testing complete!")
