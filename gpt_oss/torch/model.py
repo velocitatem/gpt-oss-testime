@@ -179,6 +179,7 @@ class AttentionBlock(torch.nn.Module):
         config: ModelConfig,
         layer_idx: int = 0,
         device: torch.device | None = None,
+        dtype: torch.dtype = torch.bfloat16,
     ):
         super().__init__()
         self.head_dim = config.head_dim
@@ -187,20 +188,20 @@ class AttentionBlock(torch.nn.Module):
         # Only apply sliding window to every other layer
         self.sliding_window = config.sliding_window if layer_idx % 2 == 0 else 0
         self.sinks = torch.nn.Parameter(
-            torch.empty(config.num_attention_heads, device=device, dtype=torch.bfloat16)
+            torch.empty(config.num_attention_heads, device=device, dtype=dtype)
         )
         self.norm = RMSNorm(config.hidden_size, device=device)
         qkv_dim = config.head_dim * (
             config.num_attention_heads + 2 * config.num_key_value_heads
         )
         self.qkv = torch.nn.Linear(
-            config.hidden_size, qkv_dim, device=device, dtype=torch.bfloat16
+            config.hidden_size, qkv_dim, device=device, dtype=dtype
         )
         self.out = torch.nn.Linear(
             config.head_dim * config.num_attention_heads,
             config.hidden_size,
             device=device,
-            dtype=torch.bfloat16,
+            dtype=dtype,
         )
         self.sm_scale = 1 / math.sqrt(config.head_dim)
         self.rope = RotaryEmbedding(
@@ -261,15 +262,22 @@ class MLPBlock(torch.nn.Module):
         self,
         config: ModelConfig,
         device: torch.device | None = None,
+        dtype: torch.dtype = torch.bfloat16,
+        enable_output_sampling: bool = False,
+        noise_std: float = 0.1,
+        noise_spread: float = 0.2,
     ):
         super().__init__()
         self.num_experts = config.num_experts
         self.experts_per_token = config.experts_per_token
         self.swiglu_limit = config.swiglu_limit
         self.world_size = dist.get_world_size() if dist.is_initialized() else 1
+        self.enable_output_sampling = enable_output_sampling
+        self.noise_std = noise_std
+        self.noise_spread = noise_spread
         self.norm = RMSNorm(config.hidden_size, device=device)
         self.gate = torch.nn.Linear(
-            config.hidden_size, config.num_experts, device=device, dtype=torch.bfloat16
+            config.hidden_size, config.num_experts, device=device, dtype=dtype
         )
         assert config.intermediate_size % self.world_size == 0
         self.mlp1_weight = torch.nn.Parameter(
@@ -280,14 +288,14 @@ class MLPBlock(torch.nn.Module):
                     config.hidden_size,
                 ),
                 device=device,
-                dtype=torch.bfloat16,
+                dtype=dtype,
             )
         )
         self.mlp1_bias = torch.nn.Parameter(
             torch.empty(
                 (config.num_experts, config.intermediate_size * 2 // self.world_size),
                 device=device,
-                dtype=torch.bfloat16,
+                dtype=dtype,
             )
         )
         self.mlp2_weight = torch.nn.Parameter(
@@ -298,14 +306,14 @@ class MLPBlock(torch.nn.Module):
                     config.intermediate_size // self.world_size,
                 ),
                 device=device,
-                dtype=torch.bfloat16,
+                dtype=dtype,
             )
         )
         self.mlp2_bias = torch.nn.Parameter(
             torch.empty(
                 (config.num_experts, config.hidden_size),
                 device=device,
-                dtype=torch.bfloat16,
+                dtype=dtype,
             )
         )
 
@@ -332,8 +340,35 @@ class MLPBlock(torch.nn.Module):
 
         # Weighted sum of experts
         t = torch.einsum("bec,be->bc", t, expert_weights)
+        mlp_output = x + t
 
-        return x + t
+        # Apply output space sampling noise if enabled
+        if self.enable_output_sampling:
+            batch_size, hidden_size = mlp_output.shape
+
+            # For each sample in batch, pick a random center index
+            center_indices = torch.randint(0, hidden_size, (batch_size,), device=mlp_output.device)
+
+            # Create noise tensor
+            noise = torch.zeros_like(mlp_output)
+
+            for i in range(batch_size):
+                center_idx = center_indices[i].item()
+
+                # Create position indices relative to center
+                positions = torch.arange(hidden_size, device=mlp_output.device, dtype=torch.float32)
+                distances = torch.abs(positions - center_idx) / hidden_size
+
+                # Generate normal distribution weights (low-high spread around center)
+                weights = torch.exp(-0.5 * (distances / self.noise_spread) ** 2)
+
+                # Generate random noise and scale by weights
+                random_noise = torch.randn(hidden_size, device=mlp_output.device, dtype=mlp_output.dtype)
+                noise[i] = random_noise * weights * self.noise_std
+
+            mlp_output = mlp_output + noise
+
+        return mlp_output
 
 
 class TransformerBlock(torch.nn.Module):
@@ -342,11 +377,15 @@ class TransformerBlock(torch.nn.Module):
         config: ModelConfig,
         layer_idx: int,
         device: torch.device | None = None,
+        dtype: torch.dtype = torch.bfloat16,
+        enable_output_sampling: bool = False,
+        noise_std: float = 0.1,
+        noise_spread: float = 0.2,
     ):
         super().__init__()
         self.layer_idx = layer_idx
-        self.attn = AttentionBlock(config, layer_idx, device)
-        self.mlp = MLPBlock(config, device)
+        self.attn = AttentionBlock(config, layer_idx, device, dtype)
+        self.mlp = MLPBlock(config, device, dtype, enable_output_sampling, noise_std, noise_spread)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self.attn(x)
@@ -359,14 +398,19 @@ class Transformer(torch.nn.Module):
         self,
         config: ModelConfig,
         device: torch.device | None = None,
+        dtype: torch.dtype = torch.bfloat16,
+        enable_output_sampling: bool = False,
+        noise_std: float = 0.1,
+        noise_spread: float = 0.2,
     ):
         super().__init__()
+        self.dtype = dtype
         self.embedding = torch.nn.Embedding(
-            config.vocab_size, config.hidden_size, device=device, dtype=torch.bfloat16
+            config.vocab_size, config.hidden_size, device=device, dtype=dtype
         )
         self.block = torch.nn.ModuleList(
             [
-                TransformerBlock(config, layer_idx, device)
+                TransformerBlock(config, layer_idx, device, dtype, enable_output_sampling, noise_std, noise_spread)
                 for layer_idx in range(config.num_hidden_layers)
             ]
         )
@@ -376,7 +420,7 @@ class Transformer(torch.nn.Module):
             config.vocab_size,
             bias=False,
             device=device,
-            dtype=torch.bfloat16,
+            dtype=dtype,
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -389,7 +433,12 @@ class Transformer(torch.nn.Module):
 
     @staticmethod
     def from_checkpoint(
-        path: str, device: str | torch.device = "cuda"
+        path: str,
+        device: str | torch.device = "cuda",
+        dtype: torch.dtype = torch.bfloat16,
+        enable_output_sampling: bool = False,
+        noise_std: float = 0.1,
+        noise_spread: float = 0.2,
     ) -> "Transformer":
         if not isinstance(device, torch.device):
             device = torch.device(device)
@@ -402,6 +451,10 @@ class Transformer(torch.nn.Module):
         model = Transformer(
             config=config,
             device=device,
+            dtype=dtype,
+            enable_output_sampling=enable_output_sampling,
+            noise_std=noise_std,
+            noise_spread=noise_spread,
         )
         model.eval()
 
@@ -443,9 +496,35 @@ class Transformer(torch.nn.Module):
 
 class TokenGenerator:
     @torch.inference_mode()
-    def __init__(self, checkpoint: str, device: torch.device):
+    def __init__(
+        self,
+        checkpoint: str,
+        device: torch.device,
+        dtype: torch.dtype = torch.bfloat16,
+        enable_output_sampling: bool = False,
+        noise_std: float = 0.1,
+        noise_spread: float = 0.2,
+    ):
         self.device = device
-        self.model = Transformer.from_checkpoint(checkpoint, device=self.device)
+        self.dtype = dtype
+        self.enable_output_sampling = enable_output_sampling
+        self.model = Transformer.from_checkpoint(
+            checkpoint,
+            device=self.device,
+            dtype=dtype,
+            enable_output_sampling=enable_output_sampling,
+            noise_std=noise_std,
+            noise_spread=noise_spread,
+        )
+
+    def set_output_sampling(self, enabled: bool):
+        """Enable or disable output sampling for exploration."""
+        for block in self.model.block:
+            block.mlp.enable_output_sampling = enabled
+        if enabled:
+            self.model.train()  # Enable sampling in training mode
+        else:
+            self.model.eval()   # Disable sampling in eval mode
 
     @torch.inference_mode()
     def generate(self,
@@ -453,25 +532,41 @@ class TokenGenerator:
                  stop_tokens: list[int],
                  temperature: float = 1.0,
                  max_tokens: int = 0,
-                 return_logprobs: bool = False):
+                 return_logprobs: bool = False,
+                 enable_sampling: bool = None):
+        # Temporarily enable/disable sampling if specified
+        if enable_sampling is not None:
+            original_mode = self.model.training
+            self.set_output_sampling(enable_sampling)
+
         tokens = list(prompt_tokens)
         num_generated_tokens = 0
-        while max_tokens == 0 or num_generated_tokens < max_tokens:
-            logits = self.model(torch.as_tensor(tokens, dtype=torch.int32, device=self.device))[-1]
-            if temperature == 0.0:
-                predicted_token = torch.argmax(logits, dim=-1).item()
-            else:
-                probs = torch.softmax(logits * (1.0 / temperature), dim=-1)
-                predicted_token = torch.multinomial(probs, num_samples=1).item()
-            tokens.append(predicted_token)
-            num_generated_tokens += 1
+        try:
+            while max_tokens == 0 or num_generated_tokens < max_tokens:
+                with torch.inference_mode(mode=not (enable_sampling if enable_sampling is not None else self.enable_output_sampling)):
+                    logits = self.model(torch.as_tensor(tokens, dtype=torch.int32, device=self.device))[-1]
 
-            if return_logprobs:
-                logprobs = torch.log_softmax(logits, dim=-1)
-                selected_logprobs = logprobs[predicted_token].item()
-                yield predicted_token, selected_logprobs
-            else:
-                yield predicted_token
+                if temperature == 0.0:
+                    predicted_token = torch.argmax(logits, dim=-1).item()
+                else:
+                    probs = torch.softmax(logits * (1.0 / temperature), dim=-1)
+                    predicted_token = torch.multinomial(probs, num_samples=1).item()
+                tokens.append(predicted_token)
+                num_generated_tokens += 1
 
-            if predicted_token in stop_tokens:
-                break
+                if return_logprobs:
+                    logprobs = torch.log_softmax(logits, dim=-1)
+                    selected_logprobs = logprobs[predicted_token].item()
+                    yield predicted_token, selected_logprobs
+                else:
+                    yield predicted_token
+
+                if predicted_token in stop_tokens:
+                    break
+        finally:
+            # Restore original mode if we temporarily changed it
+            if enable_sampling is not None:
+                if original_mode:
+                    self.model.train()
+                else:
+                    self.model.eval()

@@ -9,12 +9,14 @@ from gpt_oss.tokenizer import get_tokenizer
 
 
 def main(args):
+    import torch
+    dtype = torch.float16 if args.fp16 else torch.bfloat16
     match args.backend:
         case "torch":
             from gpt_oss.torch.utils import init_distributed
             from gpt_oss.torch.model import TokenGenerator as TorchGenerator
             device = init_distributed()
-            generator = TorchGenerator(args.checkpoint, device=device)
+            generator = TorchGenerator(args.checkpoint, device=device, dtype=dtype)
         case "triton":
             from gpt_oss.torch.utils import init_distributed
             from gpt_oss.triton.model import TokenGenerator as TritonGenerator
@@ -89,6 +91,11 @@ if __name__ == "__main__":
         type=int,
         default=4096,
         help="Context length for Triton backend",
+    )
+    parser.add_argument(
+        "--fp16",
+        action="store_true",
+        help="Use FP16 precision instead of bfloat16 (reduces memory usage but may affect quality)",
     )
     args = parser.parse_args()
 

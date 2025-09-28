@@ -69,10 +69,18 @@ def main(args):
             from gpt_oss.torch.model import TokenGenerator as TorchGenerator
             from gpt_oss.torch.utils import init_distributed
             device = init_distributed()
-            generator = TorchGenerator(args.checkpoint, device)
+            generator = TorchGenerator(args.checkpoint, device, enable_output_sampling=True)
+            if hasattr(generator, "set_output_sampling"):
+                generator.set_output_sampling(True)
         case "vllm":
             from gpt_oss.vllm.token_generator import TokenGenerator as VLLMGenerator
-            generator = VLLMGenerator(args.checkpoint, tensor_parallel_size=2)
+            generator = VLLMGenerator(
+                args.checkpoint,
+                tensor_parallel_size=1,
+                enable_output_sampling=True,
+                noise_std=0.15,
+                noise_spread=0.3
+            )
         case _:
             raise ValueError(f"Invalid backend: {args.backend}")
 
