@@ -43,6 +43,8 @@ def test_language_sampling():
             noise_std=0.15,
             noise_spread=0.3
         )
+        # Ensure sampling is actually active (training gate)
+        generator.set_output_sampling(True)
         print("✓ Generator created with sampling enabled")
 
         # Test prompt about dog care website colors

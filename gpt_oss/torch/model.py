@@ -343,7 +343,7 @@ class MLPBlock(torch.nn.Module):
         mlp_output = x + t
 
         # Apply output space sampling noise if enabled
-        if self.enable_output_sampling and self.training:
+        if self.enable_output_sampling:
             batch_size, hidden_size = mlp_output.shape
 
             # For each sample in batch, pick a random center index

@@ -70,6 +70,8 @@ def main(args):
             from gpt_oss.torch.utils import init_distributed
             device = init_distributed()
             generator = TorchGenerator(args.checkpoint, device, enable_output_sampling=True)
+            if hasattr(generator, "set_output_sampling"):
+                generator.set_output_sampling(True)
         case "vllm":
             from gpt_oss.vllm.token_generator import TokenGenerator as VLLMGenerator
             generator = VLLMGenerator(

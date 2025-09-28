@@ -5,7 +5,7 @@ Test script for output space sampling functionality in GPT-OSS model.
 
 import torch
 from gpt_oss.torch.model import TokenGenerator
-from gpt_oss.harmony.encoding import load_harmony_encoding, HarmonyEncodingName
+from openai_harmony import load_harmony_encoding, HarmonyEncodingName
 
 def test_output_sampling():
     """Test the output space sampling functionality."""

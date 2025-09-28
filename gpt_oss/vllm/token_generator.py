@@ -21,9 +21,10 @@ class TokenGenerator:
         self.noise_std = noise_std
         self.noise_spread = noise_spread
 
-        # Apply sampling to model if enabled
+        # Apply sampling to model if enabled and activate the gate
         if self.enable_output_sampling:
             self._enable_model_sampling()
+            self.set_output_sampling(True)
 
     def _enable_model_sampling(self):
         """Enable output space sampling in the VLLM model."""

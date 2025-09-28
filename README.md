@@ -22,6 +22,7 @@ Both models were trained using our [harmony response format][harmony] and should
 
 ## Table of Contents
 - [Highlights](#highlights)
+- [Output Space Sampling (BETA)](#output-space-sampling)
 - [Inference examples](#inference-examples)
 - [About this repository](#about-this-repository)
 - [Setup](#setup)
@@ -43,6 +44,69 @@ Both models were trained using our [harmony response format][harmony] and should
 - **Fine-tunable:** Fully customize models to your specific use case through parameter fine-tuning.
 - **Agentic capabilities:** Use the models' native capabilities for function calling, [web browsing](#browser), [Python code execution](#python), and Structured Outputs.
 - **MXFP4 quantization:** The models were post-trained with MXFP4 quantization of the MoE weights, making `gpt-oss-120b` run on a single 80GB GPU (like NVIDIA H100 or AMD MI300X) and the `gpt-oss-20b` model run within 16GB of memory. All evals were performed with the same MXFP4 quantization.
+
+### Output Space Sampling
+
+The gpt-oss models include an experimental **output space sampling** feature that adds controlled noise to the MLP layer outputs during inference. This technique is designed to explore the model's output space and potentially discover novel reasoning patterns or creative solutions.
+
+#### How It Works
+
+Output space sampling injects Gaussian noise into the hidden representations at the MLP layer outputs in each transformer block. The noise is applied with spatial locality - instead of uniform noise across all dimensions, it concentrates around randomly selected "center" indices in the hidden dimension space.
+
+The sampling algorithm:
+1. **Random Center Selection**: For each sample in the batch, randomly selects a center index in the hidden dimension space
+2. **Distance-Based Weighting**: Computes weights using a Gaussian distribution centered at the selected index, with weight decay based on distance from center
+3. **Noise Application**: Generates random Gaussian noise and scales it by the distance-based weights and a configurable standard deviation
+
+#### Configuration Parameters
+
+- **`enable_output_sampling`**: Boolean flag to enable/disable the feature
+- **`noise_std`**: Standard deviation of the base Gaussian noise (typical values: 0.1-0.3)
+- **`noise_spread`**: Controls the spatial spread of noise around the center index (typical values: 0.1-0.5)
+
+#### Usage Examples
+
+**PyTorch Implementation:**
+```python
+from gpt_oss.torch.model import TokenGenerator
+
+# Enable sampling during model creation
+generator = TokenGenerator(
+    checkpoint_path,
+    device,
+    enable_output_sampling=True
+)
+
+# Activate sampling (required for noise to be applied)
+if hasattr(generator, "set_output_sampling"):
+    generator.set_output_sampling(True)
+```
+
+**vLLM Implementation:**
+```python
+from gpt_oss.vllm.token_generator import TokenGenerator
+
+# Enable sampling with custom parameters
+generator = TokenGenerator(
+    "gpt-oss-20b",
+    tensor_parallel_size=1,
+    enable_output_sampling=True,
+    noise_std=0.15,
+    noise_spread=0.3
+)
+
+# Ensure sampling is active (training gate)
+generator.set_output_sampling(True)
+```
+
+**Terminal Chat:**
+```bash
+python -m gpt_oss.chat \
+    --backend vllm \
+    gpt-oss-20b
+```
+
+The vLLM backend automatically enables output sampling with default parameters.
 
 ### Inference examples
 
